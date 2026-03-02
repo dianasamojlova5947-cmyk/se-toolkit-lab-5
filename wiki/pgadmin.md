@@ -78,6 +78,10 @@ Actions:
    - `Password`: the value of [`POSTGRES_PASSWORD`](./dotenv-docker-secret.md#postgres_password).
 6. Click `Save`.
 
+   You should see the server in the [`Object Explorer`](./pgadmin.md#object-explorer):
+
+   <img alt="Object explorer and server" src="./images/pgadmin/object-explorer-server.png" style="width:300px">
+
 ### Delete the `PostgreSQL` server
 
 <!-- TODO -->
