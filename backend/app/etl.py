@@ -144,4 +144,8 @@ async def sync(session: AsyncSession) -> dict:
     - Return a dict: {"new_records": <number of new interactions>,
                       "total_records": <total interactions in DB>}
     """
+<<<<<<< Updated upstream
     raise NotImplementedError
+=======
+    raise NotImplementedError
+>>>>>>> Stashed changes
