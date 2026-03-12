@@ -1,3 +1,11 @@
+import httpx
+from sqlalchemy import select, func
+from datetime import datetime
+
+from app.models.item import ItemRecord
+from app.models.learner import Learner
+from app.models.interaction import InteractionLog
+
 """ETL pipeline: fetch data from the autochecker API and load it into the database.
 
 The autochecker dashboard API provides two endpoints:
@@ -31,7 +39,18 @@ async def fetch_items() -> list[dict]:
     - Return the parsed list of dicts
     - Raise an exception if the response status is not 200
     """
-    raise NotImplementedError
+    url = f"{settings.autochecker_api_url}/api/items"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            url,
+            auth=(settings.autochecker_email, settings.autochecker_password)
+        )
+
+    if response.status_code != 200:
+        raise Exception(f"Failed to fetch items: {response.text}")
+
+    return response.json()
 
 
 async def fetch_logs(since: datetime | None = None) -> list[dict]:
@@ -50,7 +69,39 @@ async def fetch_logs(since: datetime | None = None) -> list[dict]:
       - Use the submitted_at of the last log as the new "since" value
     - Return the combined list of all log dicts from all pages
     """
-    raise NotImplementedError
+    url = f"{settings.autochecker_api_url}/api/logs"
+    params = {"limit": 500}
+    
+    if since:
+        params["since"] = since.isoformat()
+
+    all_logs = []
+
+    async with httpx.AsyncClient() as client:
+    while True:
+        response = await client.get(
+            url,
+            params=params,
+            auth=(settings.autochecker_email, settings.autochecker_password)
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch logs: {response.text}")
+
+        data = response.json()
+        logs = data["logs"]
+
+        if not logs:
+            break
+
+        all_logs.extend(logs)
+
+        if not data["has_more"]:
+            break
+
+        params["since"] = logs[-1]["submitted_at"]
+
+    return all_logs
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +130,52 @@ async def load_items(items: list[dict], session: AsyncSession) -> int:
     - Commit after all inserts
     - Return the number of newly created items
     """
-    raise NotImplementedError
+    # labs
+    for item in items:
+        if item["type"] == "lab":
+        result = await session.execute(
+            select(ItemRecord).where(
+                ItemRecord.type == "lab",
+                ItemRecord.title == item["title"]
+            )
+        )
+        lab = result.scalar_one_or_none()
+
+        if not lab:
+            lab = ItemRecord(type="lab", title=item["title"])
+            session.add(lab)
+            await session.flush()
+            new_items += 1
+
+        lab_map[item["lab"]] = lab
+
+    # tasks
+    for item in items:
+        if item["type"] == "task":
+        lab = lab_map.get(item["lab"])
+        if not lab:
+            continue
+
+        result = await session.execute(
+            select(ItemRecord).where(
+                ItemRecord.title == item["title"],
+                ItemRecord.parent_id == lab.id
+            )
+        )
+        task = result.scalar_one_or_none()
+
+        if not task:
+            task = ItemRecord(
+                type="task",
+                title=item["title"],
+                parent_id=lab.id
+            )
+            session.add(task)
+            new_items += 1
+
+    await session.commit()
+
+    return new_items
 
 
 async def load_logs(
@@ -121,7 +217,78 @@ async def load_logs(
     - Commit after all inserts
     - Return the number of newly created interactions
     """
-    raise NotImplementedError
+    new_items = 0
+    lab_map = {}
+
+    new_logs = 0
+
+    # map short ids -> titles
+    lookup = {}
+    for item in items_catalog:
+    key = (item["lab"], item["task"])
+    lookup[key] = item["title"]
+
+    for log in logs:
+
+    # learner
+    result = await session.execute(
+        select(Learner).where(
+            Learner.external_id == log["student_id"]
+        )
+    )
+    learner = result.scalar_one_or_none()
+
+    if not learner:
+        learner = Learner(
+            external_id=log["student_id"],
+            student_group=log["group"]
+        )
+        session.add(learner)
+        await session.flush()
+
+    # item title
+    title = lookup.get((log["lab"], log["task"]))
+    if not title:
+        continue
+
+    result = await session.execute(
+        select(ItemRecord).where(ItemRecord.title == title)
+    )
+    item = result.scalar_one_or_none()
+
+    if not item:
+        continue
+
+    # idempotency
+    result = await session.execute(
+        select(InteractionLog).where(
+            InteractionLog.external_id == log["id"]
+        )
+    )
+    exists = result.scalar_one_or_none()
+
+    if exists:
+        continue
+
+    interaction = InteractionLog(
+        external_id=log["id"],
+        learner_id=learner.id,
+        item_id=item.id,
+        kind="attempt",
+        score=log["score"],
+        checks_passed=log["passed"],
+        checks_total=log["total"],
+        created_at=datetime.fromisoformat(
+            log["submitted_at"].replace("Z", "+00:00")
+        )
+    )
+
+    session.add(interaction)
+    new_logs += 1
+
+    await session.commit()
+
+    return new_logs
 
 
 # ---------------------------------------------------------------------------
@@ -144,4 +311,29 @@ async def sync(session: AsyncSession) -> dict:
     - Return a dict: {"new_records": <number of new interactions>,
                       "total_records": <total interactions in DB>}
     """
-    raise NotImplementedError
+    # Step 1: items
+    items = await fetch_items()
+    await load_items(items, session)
+
+    # Step 2: last timestamp
+    result = await session.execute(
+    select(func.max(InteractionLog.created_at))
+)
+
+    last_sync = result.scalar_one_or_none()
+
+    # Step 3: logs
+    logs = await fetch_logs(last_sync)
+    new_records = await load_logs(logs, items, session)
+
+    # total count
+    result = await session.execute(
+    select(func.count()).select_from(InteractionLog)
+)
+
+    total_records = result.scalar_one()
+
+    return {
+    "new_records": new_records,
+    "total_records": total_records
+}
