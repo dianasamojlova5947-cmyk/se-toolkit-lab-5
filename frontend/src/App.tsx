@@ -1,4 +1,5 @@
-import { useState, useEffect, useReducer, FormEvent } from 'react'
+import { useEffect, useReducer, useState, type FormEvent } from 'react'
+import Dashboard from './Dashboard'
 import './App.css'
 
 const STORAGE_KEY = 'api_key'
@@ -21,6 +22,8 @@ type FetchAction =
   | { type: 'fetch_success'; data: Item[] }
   | { type: 'fetch_error'; message: string }
 
+type Page = 'items' | 'dashboard'
+
 function fetchReducer(_state: FetchState, action: FetchAction): FetchState {
   switch (action.type) {
     case 'fetch_start':
@@ -29,6 +32,8 @@ function fetchReducer(_state: FetchState, action: FetchAction): FetchState {
       return { status: 'success', items: action.data }
     case 'fetch_error':
       return { status: 'error', message: action.message }
+    default:
+      return _state
   }
 }
 
@@ -37,6 +42,7 @@ function App() {
     () => localStorage.getItem(STORAGE_KEY) ?? '',
   )
   const [draft, setDraft] = useState('')
+  const [page, setPage] = useState<Page>('items')
   const [fetchState, dispatch] = useReducer(fetchReducer, { status: 'idle' })
 
   useEffect(() => {
@@ -57,70 +63,132 @@ function App() {
       )
   }, [token])
 
-  function handleConnect(e: FormEvent) {
-    e.preventDefault()
+  function handleConnect(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
     const trimmed = draft.trim()
     if (!trimmed) return
+
     localStorage.setItem(STORAGE_KEY, trimmed)
     setToken(trimmed)
+    setPage('items')
   }
 
   function handleDisconnect() {
     localStorage.removeItem(STORAGE_KEY)
     setToken('')
     setDraft('')
+    setPage('items')
   }
 
   if (!token) {
     return (
-      <form className="token-form" onSubmit={handleConnect}>
-        <h1>API Key</h1>
-        <p>Enter your API key to connect.</p>
-        <input
-          type="password"
-          placeholder="Token"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button type="submit">Connect</button>
-      </form>
+      <main className="auth-shell">
+        <form className="token-form card" onSubmit={handleConnect}>
+          <p className="eyebrow">Learning management service</p>
+          <h1>Connect your API key</h1>
+          <p className="muted">
+            Enter the bearer token stored in the backend API_KEY setting.
+          </p>
+          <label className="field">
+            <span>API key</span>
+            <input
+              type="password"
+              placeholder="Token"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+          </label>
+          <button type="submit" className="primary-button">
+            Connect
+          </button>
+        </form>
+      </main>
     )
   }
 
   return (
-    <div>
-      <header className="app-header">
-        <h1>Items</h1>
-        <button className="btn-disconnect" onClick={handleDisconnect}>
-          Disconnect
-        </button>
+    <div className="app-shell">
+      <header className="app-header card">
+        <div>
+          <p className="eyebrow">Learning management service</p>
+          <h1>{page === 'items' ? 'Items' : 'Analytics Dashboard'}</h1>
+        </div>
+
+        <div className="header-actions">
+          <nav className="page-switcher" aria-label="Page navigation">
+            <button
+              type="button"
+              className={page === 'items' ? 'chip active' : 'chip'}
+              onClick={() => setPage('items')}
+            >
+              Items
+            </button>
+            <button
+              type="button"
+              className={page === 'dashboard' ? 'chip active' : 'chip'}
+              onClick={() => setPage('dashboard')}
+            >
+              Dashboard
+            </button>
+          </nav>
+
+          <button className="secondary-button" onClick={handleDisconnect}>
+            Disconnect
+          </button>
+        </div>
       </header>
 
-      {fetchState.status === 'loading' && <p>Loading...</p>}
-      {fetchState.status === 'error' && <p>Error: {fetchState.message}</p>}
+      <main className="page-body">
+        {page === 'items' ? (
+          <section className="card content-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Catalog</p>
+                <h2>Items</h2>
+              </div>
+              <p className="muted">
+                These records come from the authenticated `/items/` endpoint.
+              </p>
+            </div>
 
-      {fetchState.status === 'success' && (
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>ItemType</th>
-              <th>Title</th>
-              <th>Created at</th>
-            </tr>
-          </thead>
-          <tbody>
-            {fetchState.items.map((item) => (
-              <tr key={item.id}>
-                <td>{item.id}</td>
-                <td>{item.type}</td>
-                <td>{item.title}</td>
-                <td>{item.created_at}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            {fetchState.status === 'loading' && (
+              <p className="status-message">Loading items...</p>
+            )}
+            {fetchState.status === 'error' && (
+              <p className="status-message error">
+                Error loading items: {fetchState.message}
+              </p>
+            )}
+
+            {fetchState.status === 'success' && (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Type</th>
+                      <th>Title</th>
+                      <th>Created at</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fetchState.items.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.id}</td>
+                        <td>{item.type}</td>
+                        <td>{item.title}</td>
+                        <td>{item.created_at}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        ) : (
+          <Dashboard token={token} />
+        )}
+      </main>
     </div>
   )
 }
