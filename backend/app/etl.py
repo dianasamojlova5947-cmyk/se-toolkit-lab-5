@@ -15,6 +15,8 @@ from .models.item import ItemRecord
 from .models.learner import Learner
 from .settings import settings
 
+TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
 
 def _auth() -> tuple[str, str]:
     return settings.autochecker_email, settings.autochecker_password
@@ -76,7 +78,9 @@ async def _get_item(
 async def fetch_items() -> list[dict[str, Any]]:
     """Fetch the lab/task catalog from the Autochecker API."""
 
-    async with httpx.AsyncClient(auth=_auth(), base_url=_base_url()) as client:
+    async with httpx.AsyncClient(
+        auth=_auth(), base_url=_base_url(), timeout=TIMEOUT
+    ) as client:
         response = await client.get("/api/items")
         response.raise_for_status()
         return response.json()
@@ -90,7 +94,9 @@ async def fetch_logs(since: str | None = None) -> list[dict[str, Any]]:
     if since is not None:
         params["since"] = since
 
-    async with httpx.AsyncClient(auth=_auth(), base_url=_base_url()) as client:
+    async with httpx.AsyncClient(
+        auth=_auth(), base_url=_base_url(), timeout=TIMEOUT
+    ) as client:
         while True:
             response = await client.get("/api/logs", params=params)
             response.raise_for_status()
@@ -106,7 +112,9 @@ async def fetch_logs(since: str | None = None) -> list[dict[str, Any]]:
     return logs
 
 
-async def load_items(items: list[dict[str, Any]], session: AsyncSession) -> dict[str, int]:
+async def load_items(
+    items: list[dict[str, Any]], session: AsyncSession
+) -> dict[str, int]:
     """Insert labs and tasks into the database."""
 
     labs, tasks = _catalog_indexes(items)
@@ -134,7 +142,9 @@ async def load_items(items: list[dict[str, Any]], session: AsyncSession) -> dict
             parent_id=parent.id,
         )
         if item is None:
-            session.add(ItemRecord(type="task", title=task["title"], parent_id=parent.id))
+            session.add(
+                ItemRecord(type="task", title=task["title"], parent_id=parent.id)
+            )
             new_records += 1
 
     await session.commit()
@@ -217,9 +227,13 @@ async def load_logs(
                 learner_id=learner.id,
                 item_id=db_item.id,
                 kind="attempt",
-                score=float(log["score"]),
-                checks_passed=int(log["passed"]),
-                checks_total=int(log["total"]),
+                score=float(log["score"]) if log.get("score") is not None else None,
+                checks_passed=int(log["passed"])
+                if log.get("passed") is not None
+                else None,
+                checks_total=int(log["total"])
+                if log.get("total") is not None
+                else None,
                 created_at=_parse_timestamp(log["submitted_at"]),
             )
         )
@@ -235,9 +249,7 @@ async def sync(session: AsyncSession) -> dict[str, int]:
     items = await fetch_items()
     await load_items(items, session)
 
-    result = await session.exec(
-        select(func.max(InteractionLog.created_at))
-    )
+    result = await session.exec(select(func.max(InteractionLog.created_at)))
     last_synced_at = result.first()
     since = _format_since(last_synced_at) if last_synced_at is not None else None
 
