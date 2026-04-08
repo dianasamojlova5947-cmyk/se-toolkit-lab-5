@@ -254,4 +254,12 @@ async def sync(session: AsyncSession) -> dict[str, int]:
     since = _format_since(last_synced_at) if last_synced_at is not None else None
 
     logs = await fetch_logs(since=since)
-    return await load_logs(logs, items, session)
+    load_result = await load_logs(logs, items, session)
+
+    total_result = await session.exec(select(func.count(InteractionLog.id)))
+    total_records = total_result.one()
+
+    return {
+        "new_records": load_result["new_records"],
+        "total_records": total_records,
+    }
