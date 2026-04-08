@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +36,17 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="allow",
     )
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def _parse_debug(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "release":
+                return False
+            if normalized == "debug":
+                return True
+        return value
 
 
 settings = Settings()
